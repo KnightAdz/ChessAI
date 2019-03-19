@@ -16,6 +16,7 @@ class Game:
     def __init__(self, display):
         self.display = display
         self.in_play_piece = None
+        self.font = pygame.font.SysFont(Config['game']['font'], Config['game']['fontsize'])
 
     def loop(self):
         clock = pygame.time.Clock()
@@ -23,27 +24,34 @@ class Game:
         # Initial set up
         self.set_up_new_game()
 
+        game_over = False
+
         # Game loop
         while True:
-            # Alternate control between the players
-            self.active_player = self.players[divmod(self.turn_counter,2)[1]]
 
-            # Check for the win condition: the king not having any valid moves and being threatened by one enemy piece
-            king_no_moves, king_in_check = self.check_win_condition()
+            if game_over == False:
+                # Alternate control between the players
+                self.active_player = self.players[divmod(self.turn_counter,2)[1]]
 
-            # Calculate safe squares for the new player
-#            occupied_squares = self.board.get_occupied_squares(self.pieces)
+                # Check for the win condition: the king not having any valid moves and being threatened by one enemy piece
+                king_no_moves, king_in_check = self.check_win_condition()
 
-            if self.active_player.AI == False:
-                # Check input events
-                self.handle_input()
-            else:
-                # Compute move
-                self.active_player.take_turn(self.pieces)
-                self.turn_counter += 1
+                if king_no_moves and king_in_check:
+                    game_over = True
+                else:
+                    if self.active_player.AI == False:
+                        # Check input events
+                        self.handle_input()
+                    else:
+                        # Compute move
+                        res = self.active_player.take_turn(self.pieces)
+                        if res == 1:
+                            game_over = True
+                        else:
+                            self.turn_counter += 1
 
             # if both players are AI
-            if self.players[0].AI and self.players[1].AI:
+            if (self.players[0].AI and self.players[1].AI) or game_over:
                 # Be able to quit
                 for event in pygame.event.get():
                     if event.type == pygame.QUIT:
@@ -59,6 +67,18 @@ class Game:
             # Draw pieces on the board
             for p in self.pieces:
                 p.draw(self.board)
+
+            # Show the number of turns
+            textsurface = self.font.render(str(self.turn_counter), False, Config['colors']['white'])
+            self.display.blit(textsurface, (750, 10))
+
+            # If someone wins
+            if game_over == True:
+                winning_team =  'Black'
+                if self.active_player.white_team == False:
+                    winning_team = 'White'
+                textsurface = self.font.render("{} wins!!!".format(winning_team), False, Config['colors']['red'])
+                self.display.blit(textsurface, (300, 300))
 
             # update the display and increase the tick
             pygame.display.update()
@@ -84,8 +104,8 @@ class Game:
                     self.pieces.append(Rook(self.display, t, p))
 
             # Also create a player for the team
+            #self.players.append(Player(t,True))
             self.players.append(Player(t,t))
-            #self.players.append(Player(t, True))
 
         self.turn_counter = 0
 
@@ -140,6 +160,7 @@ class Game:
                     # If this is the opposing king
                     if p.name == 'King':
                         # check for moves
+                        #moves, _ = p.get_valid_moves(self.pieces)
                         moves = p.get_valid_moves(self.pieces)
                         if moves is None:
                             king_no_moves = True

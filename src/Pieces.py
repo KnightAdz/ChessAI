@@ -2,7 +2,7 @@ import pygame
 import random
 
 from src.config import Config
-
+from src.Move import Move
 
 class Chesspiece:
     def __init__(self, display):
@@ -53,31 +53,49 @@ class Chesspiece:
         # check if valid move for the piece
         if self.is_valid_move(all_pieces, xpos_new, ypos_new):
 
-            # check if the new space is occupied
-            for p in all_pieces:
-                if p.xpos == xpos_new and p.ypos == ypos_new:
-                    if p.white_team != self.white_team:
-                        p.get_taken()
-
             # complete the move
-            print("{} from ({},{}) to ({},{})".format(self.name, self.xpos, self.ypos, xpos_new, ypos_new))
+            xpos_old = self.xpos
+            ypos_old = self.ypos
+            has_moved_old = self.has_moved
             self.xpos = xpos_new
             self.ypos = ypos_new
             self.has_moved = True
+
+            # check if the new space is occupied
+            for op in all_pieces:
+                if op.xpos == xpos_new and op.ypos == ypos_new:
+                    if op.white_team != self.white_team:
+                        # Take the piece
+                        op.get_taken()
+                        print("{} taken".format(op.name))
+                        break
+
+            # check if the king is in check now, if so we will need to reverse the move
+            for p in all_pieces:
+                if p.is_live and p.white_team == self.white_team and p.name == 'King':
+                    if p.is_in_check(all_pieces):
+                        self.xpos = xpos_old
+                        self.ypos = ypos_old
+                        self.has_moved = has_moved_old
+                        op.get_untaken()
+                        print("Move cancelled due to leaving King in check")
+                        return
+
+            print("{} from ({},{}) to ({},{})".format(self.name, xpos_old, ypos_old, xpos_new, ypos_new))
 
             return 'Successful move'
 
 
     def get_taken(self):
         self.is_live = False
-        self.y_pos = 10
-        if self.white_team == True:
-            self.x_pos = 10
-        else:
-            self.x_pos = 700
 
+    def get_untaken(self):
+        self.is_live = True
 
     def is_valid_move(self, all_pieces, xpos_new, ypos_new):
+        # Return False if a move isn't valid
+        # Return True is a move is valid
+        # Return a piece if the move is valid and takes a piece
 
         x_change = xpos_new - self.xpos
         y_change = ypos_new - self.ypos
@@ -93,6 +111,7 @@ class Chesspiece:
             return False
 
         # check if the new space is occupied
+        take_piece = None
         for p in all_pieces:
             if p.is_live:
                 if p.xpos == xpos_new and p.ypos == ypos_new:
@@ -102,6 +121,10 @@ class Chesspiece:
                     # If the king then we can't do this
                     elif p.name == 'King':
                         return False
+                    # Else, let's record the piece to be takem
+                    else:
+                        take_piece = p
+                        break
 
         # check if space en route to the destination is occupied (except for Knight)
         if self.name != 'Knight':
@@ -137,9 +160,10 @@ class Chesspiece:
                     if abs(occ_y - self.ypos) < abs(y_change):
                         return False
 
-        # can't move and leave the king in check
-
-        return True
+        if take_piece is None:
+            return True
+        else:
+            return take_piece
 
 
     # List out the moves that this piece could make
@@ -147,13 +171,17 @@ class Chesspiece:
         valid_moves = []
         for i in range(Config['playarea']['squares']):
             for j in range(Config['playarea']['squares']):
-                if self.is_valid_move(all_pieces, i, j):
-                    valid_moves.append([i,j])
+                valid = self.is_valid_move(all_pieces, i, j)
+                if isinstance(valid,Chesspiece):
+                    valid_moves.append([i, j, valid])
+                elif valid:
+                    valid_moves.append([i, j, None])
 
         if valid_moves == []:
             return
 
         return valid_moves
+
 
     # list out any pieces from the opposing team that this piece is threatening
     def get_threatened_pieces(self, all_pieces):
@@ -175,13 +203,18 @@ class Chesspiece:
 
 
     # list out any squares that this piece could threaten from current position
-    def get_threatened_squares(self):
+    def get_threatened_squares(self, all_pieces):
         squares = []
+        direction_blocked = [ False for v in self.movement_vectors ]
         for r in range(self.range):
-            for v in self.movement_vectors:
-                new_pos = [self.xpos + (r+1)*v[0], self.ypos + (r+1)*v[1]]
-                if new_pos[0] >= 0 and new_pos[0] < 8 and new_pos[1] >= 0 and new_pos[1] < 8:
-                    squares.append(new_pos)
+            for i,v in enumerate(self.movement_vectors):
+                if direction_blocked[i] == False:
+                    new_pos = [self.xpos + (r+1)*v[0], self.ypos + (r+1)*v[1]]
+                    if new_pos[0] >= 0 and new_pos[0] < 8 and new_pos[1] >= 0 and new_pos[1] < 8:
+                        squares.append(new_pos)
+                    for p in all_pieces:
+                        if p.is_live and p.xpos == new_pos[0] and p.ypos == new_pos[1]:
+                            direction_blocked[i] = True
 
         if squares == []:
             return None
@@ -227,17 +260,28 @@ class King(Chesspiece):
             return False
 
         # king can't move self into check
-        for p in all_pieces:
-            if p.is_live and p.white_team != self.white_team:
-                squares = p.get_threatened_squares()
-                if squares is not None:
-                    for m in squares:
-                        if xpos_new == m[0] and ypos_new == m[1]:
-                            return False
+        if self.is_in_check(all_pieces, xpos_new, ypos_new):
+            return False
 
         return super().is_valid_move(all_pieces, xpos_new, ypos_new)
 
 
+    def is_in_check(self, all_pieces, xpos=-1, ypos=-1):
+        # If a potential new position is submitted, evaluate that
+        if xpos != -1 and ypos != -1:
+            pos = [xpos, ypos]
+        else:
+            pos = [self.xpos, self.ypos]
+
+        threatened_squares = []
+
+        for p in all_pieces:
+            if p.white_team != self.white_team and p.is_live:
+                threatened_squares = p.get_threatened_squares(all_pieces)
+                if pos in threatened_squares:
+                    return True
+
+        return False
 
 class Queen(Chesspiece):
     def __init__(self, display, white_team, copy=0):
@@ -289,6 +333,7 @@ class Bishop(Chesspiece):
                                   [-1,-1],#Down-Left
                                   [-1,1] #Up-left
                                   ]
+
         if white_team == True:
             self.ypos = 7
             # Set area of image file to use
@@ -339,13 +384,12 @@ class Knight(Chesspiece):
 
     def is_valid_move(self, all_pieces, xpos_new, ypos_new):
 
-        if super().is_valid_move(all_pieces, xpos_new, ypos_new) != True:
-            return False
-
         # need to move in an L shape
         change = [xpos_new - self.xpos, ypos_new - self.ypos]
         if change not in self.movement_vectors:
             return False
+
+        return super().is_valid_move(all_pieces, xpos_new, ypos_new)
 
 class Rook(Chesspiece):
     def __init__(self, display, white_team, copy=0):
@@ -411,18 +455,33 @@ class Pawn(Chesspiece):
         x_change = xpos_new - self.xpos
         y_change = ypos_new - self.ypos
 
-        if super().is_valid_move(all_pieces, xpos_new, ypos_new) == False:
+        if self.has_moved:
+            if abs(y_change) > 1:
+                return False
+        else:
+            if abs(y_change) > 2:
+                return False
+
+        if abs(y_change) > 1 and abs(x_change) > 0:
             return False
 
-        # See if the new spot is occupied as pawns work a little differently
+        if abs(x_change) > 1:
+            return False
+
         occupied = False
+        mid_occupied = False
         for p in all_pieces:
+            # See if the new spot is occupied as pawns work a little differently
             if p.xpos == xpos_new and p.ypos == ypos_new:
                 occupied = True
+            # Also, if we could move 2 spaces, check the middle square
+            if self.has_moved == False and abs(y_change) == 2:
+                if p.xpos == xpos_new and p.ypos == ypos_new - y_change*0.5:
+                    mid_occupied = True
 
         if occupied == False:
-            # if first go, can move 2 spaces
-            if self.has_moved == False and abs(y_change) == 2 and x_change == 0:
+            # if first go, can move 2 spaces, as long as we aren't blocked
+            if self.has_moved == False and abs(y_change) == 2 and x_change == 0 and mid_occupied == False:
                 return True
 
             if self.white_team and x_change == 0 and y_change == -1:
@@ -430,12 +489,60 @@ class Pawn(Chesspiece):
 
             if self.white_team == False and x_change == 0 and y_change == 1:
                 return True
+
+            return False
         else:
             # can only move diagonal if capturing a piece
             if abs(x_change) == 1:
                 if self.white_team and y_change == -1:
-                    return True
+                    return super().is_valid_move(all_pieces, xpos_new, ypos_new)
                 elif self.white_team == False and y_change == 1:
-                    return True
+                    return super().is_valid_move(all_pieces, xpos_new, ypos_new)
+                else:
+                    return False
 
-        return False
+        # Need en passant
+
+
+
+    def get_threatened_pieces(self, all_pieces):
+        threatened_pieces = []
+        moves = self.get_valid_moves(all_pieces)
+        if moves is None:
+            return None
+
+        for m in moves:
+            for p in all_pieces:
+                if p.is_live and p.white_team != p.white_team:
+                    if p.xpos == m[0] and p.ypos == m[1]:
+                        threatened_pieces.append(p)
+        if threatened_pieces == []:
+            return None
+        return threatened_pieces
+
+        return valid_moves
+
+
+    # Pawns also threaten differently...
+    def get_threatened_squares(self, all_pieces):
+        if self.is_live:
+            if self.white_team:
+                return [[self.xpos - 1, self.ypos - 1], [self.xpos + 1, self.ypos - 1]]
+            else:
+                return [[self.xpos - 1, self.ypos + 1], [self.xpos + 1, self.ypos + 1]]
+
+        return None
+
+    def move(self, all_pieces, xpos, ypos):
+        res = super().move(all_pieces,xpos,ypos)
+
+        if res == 'Successful move':
+            if ypos == 0 or ypos == 7:
+                # Create a queen instead of the pawn
+                self.get_taken()
+                q = Queen(self.display, self.white_team)
+                q.xpos = xpos
+                q.ypos = ypos
+                all_pieces.append(q)
+
+        return res
